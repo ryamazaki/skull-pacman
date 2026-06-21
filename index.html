@@ -450,10 +450,11 @@ function eatCell(cx, cy) {
 function bfsStep(fromX, fromY, toX, toY) {
   const key = (x, y) => y * COLS + x;
   const visited = new Set([key(fromX, fromY)]);
-  const queue = [{x: fromX, y: fromY, dx: 0, dy: 0}];
+  // first === null marks the start node; once we take a step it carries that step's direction
+  const queue = [{x: fromX, y: fromY, first: null}];
   const dirs = [{dx:1,dy:0},{dx:-1,dy:0},{dx:0,dy:1},{dx:0,dy:-1}];
   while (queue.length) {
-    const {x, y, dx, dy} = queue.shift();
+    const {x, y, first} = queue.shift();
     for (const d of dirs) {
       const nx = x+d.dx, ny = y+d.dy;
       if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) continue;
@@ -461,9 +462,9 @@ function bfsStep(fromX, fromY, toX, toY) {
       const k = key(nx, ny);
       if (visited.has(k)) continue;
       visited.add(k);
-      const firstDx = dx || d.dx, firstDy = dy || d.dy;
-      if (nx === toX && ny === toY) return {dx: firstDx, dy: firstDy};
-      queue.push({x: nx, y: ny, dx: firstDx, dy: firstDy});
+      const stepDir = first || d;
+      if (nx === toX && ny === toY) return stepDir;
+      queue.push({x: nx, y: ny, first: stepDir});
     }
   }
   return null;
