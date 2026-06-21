@@ -447,6 +447,28 @@ function eatCell(cx, cy) {
 
 // ---- Ghost AI ----
 
+function bfsStep(fromX, fromY, toX, toY) {
+  const key = (x, y) => y * COLS + x;
+  const visited = new Set([key(fromX, fromY)]);
+  const queue = [{x: fromX, y: fromY, dx: 0, dy: 0}];
+  const dirs = [{dx:1,dy:0},{dx:-1,dy:0},{dx:0,dy:1},{dx:0,dy:-1}];
+  while (queue.length) {
+    const {x, y, dx, dy} = queue.shift();
+    for (const d of dirs) {
+      const nx = x+d.dx, ny = y+d.dy;
+      if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) continue;
+      if (map[ny][nx] === 1) continue;
+      const k = key(nx, ny);
+      if (visited.has(k)) continue;
+      visited.add(k);
+      const firstDx = dx || d.dx, firstDy = dy || d.dy;
+      if (nx === toX && ny === toY) return {dx: firstDx, dy: firstDy};
+      queue.push({x: nx, y: ny, dx: firstDx, dy: firstDy});
+    }
+  }
+  return null;
+}
+
 function chooseGhostDir(g) {
   if (g.mode === 'house') {
     // bounce in house, countdown to exit
@@ -473,7 +495,6 @@ function chooseGhostDir(g) {
   }
 
   if (g.mode === 'returning') {
-    // Navigate back to home cell; allow ghost-house cells (type 4), block only walls
     if (g.cx === g.homeX && g.cy === g.homeY) {
       g.eaten  = false;
       g.speed  = g.baseSpeed;
@@ -486,20 +507,9 @@ function chooseGhostDir(g) {
       }
       return;
     }
-    // Two-stage target: first reach house entry (10,9), then descend to home cell
-    const atEntry = g.cy >= 9 && g.cx === 10;
-    const tx = atEntry ? g.homeX : 10;
-    const ty = atEntry ? g.homeY : 9;
-    const dirs = [{dx:1,dy:0},{dx:-1,dy:0},{dx:0,dy:1},{dx:0,dy:-1}];
-    const valid = dirs.filter(d => {
-      const nx = g.cx+d.dx, ny = g.cy+d.dy;
-      return nx>=0 && nx<COLS && ny>=0 && ny<ROWS && map[ny][nx] !== 1;
-    });
-    if (!valid.length) return;
-    const chosen = valid.reduce((best, d) =>
-      Math.hypot(g.cx+d.dx-tx, g.cy+d.dy-ty) < Math.hypot(g.cx+best.dx-tx, g.cy+best.dy-ty) ? d : best
-    );
-    tryMove(g, chosen.dx, chosen.dy);
+    // BFS through the maze to home; walls (type 1) are the only blocker
+    const step = bfsStep(g.cx, g.cy, g.homeX, g.homeY);
+    if (step) tryMove(g, step.dx, step.dy);
     return;
   }
 
