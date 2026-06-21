@@ -287,7 +287,7 @@ function initLevel() {
       frightened: false, frightenedFlash: false,
       eaten: false,
       mode: 'house',      // house → exiting → scatter → chase → returning
-      modeTimer: 60 + i * 40,
+      modeTimer: 20 + i * 20,
       moving: false,
       tcx: def.hx, tcy: def.hy,
       scatterCx: [1, COLS-2, 1, COLS-2][i],
@@ -496,6 +496,10 @@ function tryMove(e, dx, dy) {
   if (nx < 0)    tx = COLS - 1;
   if (nx >= COLS) tx = 0;
   if (!canMove(tx, ty)) return false;
+  // On a tunnel wrap, teleport the pixel position to the entry edge so the
+  // entity glides one cell in instead of sliding back across the whole maze.
+  if (nx < 0)       { e.px = COLS * CELL + CELL/2; e.py = ty * CELL + CELL/2; }
+  else if (nx >= COLS) { e.px = -CELL/2;            e.py = ty * CELL + CELL/2; }
   e.dx = dx; e.dy = dy;
   e.tcx = tx; e.tcy = ty;
   e.moving = true;
