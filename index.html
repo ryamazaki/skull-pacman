@@ -79,6 +79,13 @@
     50%      { opacity: 0.2; }
   }
   #lives { display: flex; gap: 4px; align-items: center; }
+  input[type=range].vol {
+    width: 80px;
+    margin-top: 6px;
+    accent-color: #0ff;
+    cursor: pointer;
+    vertical-align: middle;
+  }
 </style>
 </head>
 <body>
@@ -95,13 +102,21 @@
     <div class="ui-label">LEVEL</div>
     <div class="ui-value" id="level">1</div>
   </div>
+  <div>
+    <div class="ui-label">MUSIC</div>
+    <input id="musicVol" class="vol" type="range" min="0" max="100" value="50">
+  </div>
+  <div>
+    <div class="ui-label">SFX</div>
+    <input id="sfxVol" class="vol" type="range" min="0" max="100" value="70">
+  </div>
 </div>
 <div style="position:relative;">
   <canvas id="canvas"></canvas>
   <div id="overlay">
     <h1>☠ SKULL HUNT ☠</h1>
     <p>PRESS SPACE TO START</p>
-    <div class="sub">WASD or ARROW KEYS to move</div>
+    <div class="sub">WASD or ARROW KEYS to move &nbsp;·&nbsp; M to mute</div>
   </div>
 </div>
 
@@ -112,6 +127,73 @@ const overlay  = document.getElementById('overlay');
 const scoreEl  = document.getElementById('score');
 const levelEl  = document.getElementById('level');
 const livesEl  = document.getElementById('lives');
+
+// ---- Audio: 8-bit synthesis via Web Audio, no asset files ----
+const SFX = (() => {
+  let ctx = null, muted = false, musicTimer = null, step = 0, chompHi = false;
+  let sfxGain = null, musicGain = null, sfxVol = 0.7, musicVol = 0.5;
+
+  // Sustained bass (A minor) under a square-wave melody. null = rest.
+  const BASS = [110, 146.83, 164.81, 130.81]; // A2 D3 E3 C3
+  const A4=440, C5=523.25, D5=587.33, E5=659.25, G5=783.99, A5=880;
+  const MELODY = [
+    E5,null,G5,A5,  null,A5,G5,E5,  D5,null,E5,null,  C5,null,null,null,
+    E5,null,G5,A5,  null,A5,G5,E5,  D5,E5, D5,C5,      A4,null,null,null,
+  ];
+
+  function ensure() {
+    if (!ctx) {
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      sfxGain   = ctx.createGain(); sfxGain.gain.value   = sfxVol;   sfxGain.connect(ctx.destination);
+      musicGain = ctx.createGain(); musicGain.gain.value = musicVol; musicGain.connect(ctx.destination);
+    }
+    if (ctx.state === 'suspended') ctx.resume();
+  }
+
+  function tone(freq, dur, type, vol, slideTo, bus) {
+    if (!ctx || muted || !freq) return;
+    const out = bus === 'music' ? musicGain : sfxGain;
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t);
+    if (slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+    gain.gain.setValueAtTime(vol, t);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.connect(gain).connect(out);
+    osc.start(t);
+    osc.stop(t + dur);
+  }
+
+  return {
+    init: ensure,
+    chomp() { chompHi = !chompHi; tone(chompHi ? 520 : 380, 0.05, 'square', 0.04, null, 'sfx'); },
+    power() { tone(200, 0.3, 'square', 0.18, 600, 'sfx'); },
+    eatGhost(combo) { tone(300 + combo * 80, 0.18, 'square', 0.2, 900 + combo * 80, 'sfx'); },
+    die() { stopMusicSafe(); tone(600, 0.6, 'sawtooth', 0.2, 70, 'sfx'); },
+    level() {
+      stopMusicSafe();
+      [523, 659, 784, 1047].forEach((f, i) =>
+        setTimeout(() => tone(f, 0.12, 'square', 0.16, null, 'sfx'), i * 110));
+    },
+    startMusic() {
+      if (musicTimer) return;
+      step = 0;
+      musicTimer = setInterval(() => {
+        if (step % 4 === 0) tone(BASS[(step / 4) % BASS.length], 0.7, 'triangle', 0.06, null, 'music');
+        tone(MELODY[step % MELODY.length], 0.16, 'square', 0.1, null, 'music');
+        step++;
+      }, 200);
+    },
+    stopMusic: stopMusicSafe,
+    toggleMute() { muted = !muted; return muted; },
+    setSfxVol(v)   { sfxVol   = v; if (sfxGain)   sfxGain.gain.value   = v; },
+    setMusicVol(v) { musicVol = v; if (musicGain) musicGain.gain.value = v; },
+  };
+
+  function stopMusicSafe() { clearInterval(musicTimer); musicTimer = null; }
+})();
 
 const CELL = 24;
 const COLS = 21;
@@ -438,9 +520,11 @@ function eatCell(cx, cy) {
   if (map[cy][cx] === 2) {
     map[cy][cx] = 0; score += 10; dots--;
     scoreEl.textContent = score;
+    SFX.chomp();
   } else if (map[cy][cx] === 3) {
     map[cy][cx] = 0; score += 50; dots--;
     scoreEl.textContent = score;
+    SFX.power();
     activatePower();
   }
 }
@@ -604,6 +688,7 @@ function checkCollisions() {
         eatCombo++;
         score += 200 * eatCombo;
         scoreEl.textContent = score;
+        SFX.eatGhost(eatCombo);
         showFloating(`+${200*eatCombo}`, player.px, player.py);
       } else if (!g.eaten && !g.frightened && g.mode !== 'house' && g.mode !== 'exiting') {
         playerDie();
@@ -637,6 +722,7 @@ function drawFloating() {
 
 function playerDie() {
   if (state !== 'playing') return;
+  SFX.die();
   lives--;
   updateLivesUI();
   if (lives <= 0) {
@@ -735,6 +821,7 @@ function loop(ts) {
       state = 'levelup';
       level++;
       levelEl.textContent = level;
+      SFX.level();
       showOverlay(`LEVEL ${level}`, 'PRESS SPACE');
     }
   }
@@ -745,15 +832,21 @@ function loop(ts) {
 
 // ---- Input ----
 document.addEventListener('keydown', e => {
+  if (e.code === 'KeyM') {
+    const muted = SFX.toggleMute();
+    if (muted) SFX.stopMusic(); else if (state === 'playing') SFX.startMusic();
+    return;
+  }
+
   if (e.code === 'Space' || e.code === 'Enter') {
     if (state === 'title') {
-      hideOverlay(); state = 'playing';
+      SFX.init(); hideOverlay(); state = 'playing'; SFX.startMusic();
     } else if (state === 'dead') {
-      initLevel(); hideOverlay(); state = 'playing';
+      SFX.init(); initLevel(); hideOverlay(); state = 'playing'; SFX.startMusic();
     } else if (state === 'gameover') {
-      init(); hideOverlay(); state = 'playing';
+      SFX.init(); init(); hideOverlay(); state = 'playing'; SFX.startMusic();
     } else if (state === 'levelup') {
-      initLevel(); hideOverlay(); state = 'playing';
+      SFX.init(); initLevel(); hideOverlay(); state = 'playing'; SFX.startMusic();
     }
     return;
   }
@@ -770,6 +863,16 @@ document.addEventListener('keydown', e => {
     e.preventDefault();
   }
 });
+
+// ---- Volume sliders ----
+const musicVolEl = document.getElementById('musicVol');
+const sfxVolEl   = document.getElementById('sfxVol');
+SFX.setMusicVol(musicVolEl.value / 100);
+SFX.setSfxVol(sfxVolEl.value / 100);
+musicVolEl.addEventListener('input', e => SFX.setMusicVol(e.target.value / 100));
+sfxVolEl.addEventListener('input',   e => SFX.setSfxVol(e.target.value / 100));
+// release focus so arrow keys drive the player, not the slider
+[musicVolEl, sfxVolEl].forEach(el => el.addEventListener('change', () => el.blur()));
 
 // ---- Start ----
 init();
