@@ -133,13 +133,17 @@ const SFX = (() => {
   let ctx = null, muted = false, musicTimer = null, step = 0, chompHi = false;
   let sfxGain = null, musicGain = null, sfxVol = 0.7, musicVol = 0.5;
 
-  // Sustained bass (A minor) under a square-wave melody. null = rest.
-  const BASS = [110, 146.83, 164.81, 130.81]; // A2 D3 E3 C3
-  const A4=440, C5=523.25, D5=587.33, E5=659.25, G5=783.99, A5=880;
-  const MELODY = [
-    E5,null,G5,A5,  null,A5,G5,E5,  D5,null,E5,null,  C5,null,null,null,
-    E5,null,G5,A5,  null,A5,G5,E5,  D5,E5, D5,C5,      A4,null,null,null,
+  // Progressive arrangement: a 4-chord loop (Am-F-C-G) whose layers fade in
+  // and out with a sine intensity curve over a ~2-minute loop. null = rest.
+  const STEP_MS = 200, LOOP_STEPS = 600; // 600 * 200ms = 120s
+  const CHORDS = [
+    { bass: 110.00, notes: [220.00, 261.63, 329.63] }, // Am
+    { bass:  87.31, notes: [174.61, 220.00, 261.63] }, // F
+    { bass: 130.81, notes: [196.00, 261.63, 329.63] }, // C
+    { bass:  98.00, notes: [196.00, 246.94, 293.66] }, // G
   ];
+  // 16-step rhythmic motif; values index into the current chord's notes.
+  const MEL = [0,null,1,2, null,2,1,0, 1,null,2,null, 0,null,null,null];
 
   function ensure() {
     if (!ctx) {
@@ -181,10 +185,35 @@ const SFX = (() => {
       if (musicTimer) return;
       step = 0;
       musicTimer = setInterval(() => {
-        if (step % 4 === 0) tone(BASS[(step / 4) % BASS.length], 0.7, 'triangle', 0.06, null, 'music');
-        tone(MELODY[step % MELODY.length], 0.16, 'square', 0.1, null, 'music');
+        const s = step % LOOP_STEPS;
+        // 0.12 (simple) → 1.0 (full) → back to 0.12 across the loop
+        const intensity = 0.12 + 0.88 * Math.sin((s / LOOP_STEPS) * Math.PI);
+        const chord = CHORDS[Math.floor(s / 16) % CHORDS.length];
+        const p = s % 16;
+        const idx = MEL[p];
+
+        // Bass: root on the half-beats; doubles up as the music builds
+        if (p % 8 === 0)              tone(chord.bass, 0.7, 'triangle', 0.07, null, 'music');
+        else if (intensity > 0.5 && p % 4 === 0) tone(chord.bass, 0.3, 'triangle', 0.05, null, 'music');
+
+        // Sustained pad chord at the start of each chord bar
+        if (intensity > 0.2 && p === 0)
+          chord.notes.forEach(f => tone(f, 3.0, 'triangle', 0.025, null, 'music'));
+
+        // Melody (square lead), an octave above the chord tones
+        if (intensity > 0.3 && idx !== null)
+          tone(chord.notes[idx] * 2, 0.18, 'square', 0.04 + 0.07 * intensity, null, 'music');
+
+        // Harmony a third above the melody
+        if (intensity > 0.55 && idx !== null)
+          tone(chord.notes[(idx + 1) % 3] * 2, 0.16, 'square', 0.04, null, 'music');
+
+        // High sparkle arpeggio only at the peak
+        if (intensity > 0.75 && p % 2 === 1)
+          tone(chord.notes[p % 3] * 4, 0.08, 'square', 0.03, null, 'music');
+
         step++;
-      }, 200);
+      }, STEP_MS);
     },
     stopMusic: stopMusicSafe,
     toggleMute() { muted = !muted; return muted; },
