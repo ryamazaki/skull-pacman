@@ -174,6 +174,7 @@ const SFX = (() => {
     init: ensure,
     chomp() { chompHi = !chompHi; tone(chompHi ? 520 : 380, 0.05, 'square', 0.04, null, 'sfx'); },
     power() { tone(200, 0.3, 'square', 0.18, 600, 'sfx'); },
+    powerup() { [440, 660, 880].forEach((f, i) => setTimeout(() => tone(f, 0.1, 'square', 0.14, null, 'sfx'), i * 60)); },
     eatGhost(combo) { tone(300 + combo * 80, 0.18, 'square', 0.2, 900 + combo * 80, 'sfx'); },
     die() { stopMusicSafe(); tone(600, 0.6, 'sawtooth', 0.2, 70, 'sfx'); },
     level() {
@@ -260,6 +261,7 @@ const BASE_MAP = [
 
 let map, dots, player, ghosts, score, lives, level, state, powerTimer;
 let eatCombo = 0; // ghost eat combo multiplier
+let powerups, puTimer; // floating power-ups + spawn countdown
 
 const GHOST_DEFS = [
   { color:'#f55', neon:'#f88', name:'BLINKY', hx:9,  hy:10 },
@@ -278,6 +280,15 @@ function canMove(cx, cy) {
   if (cx < 0 || cx >= COLS) return cy === 9; // left/right tunnel row
   if (cy < 0 || cy >= ROWS) return false;
   return map[cy][cx] !== 1;
+}
+
+// Wall-passing variant: during Ghost-Pass an entity may enter wall cells.
+function canMoveE(e, cx, cy) {
+  if (e && e.passTimer > 0) {
+    if (cx < 0 || cx >= COLS) return cy === 9;
+    return cy >= 0 && cy < ROWS;
+  }
+  return canMove(cx, cy);
 }
 
 function cloneMap() { return BASE_MAP.map(r => [...r]); }
@@ -301,6 +312,7 @@ function initLevel() {
     powered: false,
     moving: false,
     tcx: 10, tcy: 17,
+    boostTimer: 0, passTimer: 0,
   };
 
   ghosts = GHOST_DEFS.map((def, i) => {
@@ -321,11 +333,14 @@ function initLevel() {
       tcx: def.hx, tcy: def.hy,
       scatterCx: [1, COLS-2, 1, COLS-2][i],
       scatterCy: [1, 1, ROWS-2, ROWS-2][i],
+      boostTimer: 0, passTimer: 0,
     };
   });
 
   powerTimer = 0;
   eatCombo   = 0;
+  powerups   = [];
+  puTimer    = 300;
 }
 
 function init() {
@@ -495,20 +510,21 @@ function drawGhost(g, tick) {
 
 function stepEntity(e, chooseDir) {
   if (e.moving) {
-    // advance toward target cell center
+    // advance toward target cell center (Speed Boost multiplies the step)
+    const sp   = e.speed * (e.boostTimer > 0 ? 1.4 : 1);
     const tc   = cellCenter(e.tcx, e.tcy);
     const dx   = tc.px - e.px;
     const dy   = tc.py - e.py;
     const dist = Math.sqrt(dx*dx + dy*dy);
 
-    if (dist <= e.speed) {
+    if (dist <= sp) {
       // arrived
       e.px = tc.px; e.py = tc.py;
       e.cx = e.tcx; e.cy = e.tcy;
       e.moving = false;
     } else {
-      e.px += (dx / dist) * e.speed;
-      e.py += (dy / dist) * e.speed;
+      e.px += (dx / dist) * sp;
+      e.py += (dy / dist) * sp;
     }
   }
 
@@ -524,7 +540,7 @@ function tryMove(e, dx, dy) {
   let tx = nx, ty = ny;
   if (nx < 0)    tx = COLS - 1;
   if (nx >= COLS) tx = 0;
-  if (!canMove(tx, ty)) return false;
+  if (!canMoveE(e, tx, ty)) return false;
   // On a tunnel wrap, teleport the pixel position to the entry edge so the
   // entity glides one cell in instead of sliding back across the whole maze.
   if (nx < 0)       { e.px = COLS * CELL + CELL/2; e.py = ty * CELL + CELL/2; }
@@ -669,7 +685,8 @@ function chooseGhostDir(g) {
     if (d.dx === -g.dx && d.dy === -g.dy) return false; // no U-turn
     const nx = g.cx+d.dx, ny = g.cy+d.dy;
     if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) return ny === 9;
-    return map[ny][nx] !== 1 && map[ny][nx] !== 4;
+    if (map[ny][nx] === 4) return false;             // never re-enter the house
+    return g.passTimer > 0 || map[ny][nx] !== 1;     // Ghost-Pass walks through walls
   });
 
   if (valid.length === 0) {
@@ -705,6 +722,86 @@ function activatePower() {
       if (g.moving) { g.dx = -g.dx; g.dy = -g.dy; }
     }
   });
+}
+
+// ---- Power-ups (Speed Boost, Phase Dash, Ghost-Pass) ----
+const PU_TYPES = ['speed', 'dash', 'pass'];
+const PU_STYLE = {
+  speed: { color: '#ff0', icon: '⚡' },
+  dash:  { color: '#0ff', icon: '✦' },
+  pass:  { color: '#f0f', icon: '◈' },
+};
+
+function maybeSpawnPowerup() {
+  if (--puTimer > 0) return;
+  puTimer = 360 + Math.floor(Math.random() * 240); // every 6–10s
+  if (powerups.length >= 2) return;
+  for (let tries = 0; tries < 30; tries++) {
+    const x = 1 + Math.floor(Math.random() * (COLS - 2));
+    const y = 1 + Math.floor(Math.random() * (ROWS - 2));
+    if (map[y][x] !== 0 && map[y][x] !== 2) continue;      // walkable, not wall/house
+    if (powerups.some(p => p.cx === x && p.cy === y)) continue;
+    powerups.push({ cx: x, cy: y, type: PU_TYPES[Math.floor(Math.random() * 3)] });
+    break;
+  }
+}
+
+function collectPowerups(e) {
+  for (let i = powerups.length - 1; i >= 0; i--) {
+    const pu = powerups[i];
+    if (pu.cx === e.cx && pu.cy === e.cy) {
+      applyPowerup(e, pu.type);
+      powerups.splice(i, 1);
+      SFX.powerup();
+      showFloating(PU_STYLE[pu.type].icon, e.px, e.py);
+    }
+  }
+}
+
+function applyPowerup(e, type) {
+  if (type === 'speed')      e.boostTimer = 240;  // ~4s at 60fps
+  else if (type === 'pass')  e.passTimer  = 180;  // ~3s
+  else if (type === 'dash')  phaseDash(e);
+}
+
+// Teleport 2 cells forward (through a wall) into the next lane if it's open.
+function phaseDash(e) {
+  let dx = e.dx, dy = e.dy;
+  if (dx === 0 && dy === 0) { dx = e.ndx || 0; dy = e.ndy || 0; }
+  if (dx === 0 && dy === 0) return;
+  const tx = e.cx + dx * 2, ty = e.cy + dy * 2;
+  if (tx < 0 || tx >= COLS || ty < 0 || ty >= ROWS) return;
+  if (map[ty][tx] === 1 || map[ty][tx] === 4) return;
+  const c = cellCenter(tx, ty);
+  e.cx = e.tcx = tx; e.cy = e.tcy = ty;
+  e.px = c.px; e.py = c.py;
+  e.moving = false;
+}
+
+// When Ghost-Pass ends, never leave the entity stranded inside a wall:
+// BFS to the nearest walkable cell and snap it there.
+function ejectFromWall(e) {
+  if (map[e.cy] && map[e.cy][e.cx] !== 1) return; // already on an open cell
+  const key = (x, y) => y * COLS + x;
+  const seen = new Set([key(e.cx, e.cy)]);
+  const q = [{ x: e.cx, y: e.cy }];
+  while (q.length) {
+    const { x, y } = q.shift();
+    for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+      const nx = x+dx, ny = y+dy;
+      if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) continue;
+      const k = key(nx, ny);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      if (map[ny][nx] !== 1 && map[ny][nx] !== 4) {
+        const c = cellCenter(nx, ny);
+        e.cx = e.tcx = nx; e.cy = e.tcy = ny;
+        e.px = c.px; e.py = c.py; e.moving = false;
+        return;
+      }
+      q.push({ x: nx, y: ny });
+    }
+  }
 }
 
 function checkCollisions() {
@@ -751,6 +848,26 @@ function drawFloating() {
     f.life--;
     if (f.life <= 0) floatingTexts.splice(i, 1);
   }
+}
+
+function drawPowerups() {
+  powerups.forEach(pu => {
+    const c = cellCenter(pu.cx, pu.cy);
+    const s = PU_STYLE[pu.type];
+    const r = 8 + Math.sin(tick * 0.12) * 2;
+    ctx.save();
+    glow(s.color, 16);
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(c.px, c.py, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = s.color;
+    ctx.font = 'bold 13px Courier New';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(s.icon, c.px, c.py + 1);
+    ctx.restore();
+  });
+  noGlow();
 }
 
 function playerDie() {
@@ -801,7 +918,13 @@ function draw() {
     }
   }
 
-  ghosts.forEach(g => drawGhost(g, tick));
+  drawPowerups();
+
+  ghosts.forEach(g => {
+    ctx.globalAlpha = g.passTimer > 0 ? 0.5 : 1;  // see-through while wall-phasing
+    drawGhost(g, tick);
+    ctx.globalAlpha = 1;
+  });
 
   // draw player as offscreen skull (for compositing)
   const off = document.createElement('canvas');
@@ -811,7 +934,9 @@ function draw() {
                 player.dy === -1 ? -Math.PI/2 : player.dy === 1 ? Math.PI/2 : 0;
   drawSkull(oc, CELL, CELL, CELL * 0.42, angle, player.powered, 1);
   glow(player.powered ? '#0ff' : '#99f', player.powered ? 28 : 14);
+  ctx.globalAlpha = player.passTimer > 0 ? 0.5 : 1;  // see-through while wall-phasing
   ctx.drawImage(off, player.px - CELL, player.py - CELL);
+  ctx.globalAlpha = 1;
   noGlow();
 
   // power bar
@@ -831,10 +956,19 @@ function loop(ts) {
   tick++;
 
   if (state === 'playing') {
+    maybeSpawnPowerup();
+
     stepEntity(player, choosePlayerDir);
     eatCell(player.cx, player.cy);
+    collectPowerups(player);
 
-    ghosts.forEach(g => stepEntity(g, chooseGhostDir));
+    ghosts.forEach(g => { stepEntity(g, chooseGhostDir); collectPowerups(g); });
+
+    // tick down power-up effect timers
+    [player, ...ghosts].forEach(e => {
+      if (e.boostTimer > 0) e.boostTimer--;
+      if (e.passTimer  > 0 && --e.passTimer === 0) ejectFromWall(e);
+    });
 
     if (powerTimer > 0) {
       powerTimer--;
