@@ -194,15 +194,17 @@ function initLevel() {
 
   ghosts = GHOST_DEFS.map((def, i) => {
     const gc = cellCenter(def.hx, def.hy);
+    const baseSpeed = (spd - 0.3) + i * 0.05;
     return {
       cx: def.hx, cy: def.hy,
       px: gc.px, py: gc.py,
       dx: 0, dy: 0,
-      speed: (spd - 0.3) + i * 0.05,
+      speed: baseSpeed, baseSpeed,
+      homeX: def.hx, homeY: def.hy,
       color: def.color, neon: def.neon, name: def.name,
       frightened: false, frightenedFlash: false,
       eaten: false,
-      mode: 'house',      // house → exit → scatter → chase
+      mode: 'house',      // house → exiting → scatter → chase → returning
       modeTimer: 60 + i * 40,
       moving: false,
       tcx: def.hx, tcy: def.hy,
@@ -470,6 +472,37 @@ function chooseGhostDir(g) {
     return;
   }
 
+  if (g.mode === 'returning') {
+    // Navigate back to home cell; allow ghost-house cells (type 4), block only walls
+    if (g.cx === g.homeX && g.cy === g.homeY) {
+      g.eaten  = false;
+      g.speed  = g.baseSpeed;
+      g.moving = false;
+      g.mode   = 'house';
+      g.modeTimer = 40;
+      if (powerTimer > 0) {
+        g.frightened      = true;
+        g.frightenedFlash = powerTimer < 80;
+      }
+      return;
+    }
+    // Two-stage target: first reach house entry (10,9), then descend to home cell
+    const atEntry = g.cy >= 9 && g.cx === 10;
+    const tx = atEntry ? g.homeX : 10;
+    const ty = atEntry ? g.homeY : 9;
+    const dirs = [{dx:1,dy:0},{dx:-1,dy:0},{dx:0,dy:1},{dx:0,dy:-1}];
+    const valid = dirs.filter(d => {
+      const nx = g.cx+d.dx, ny = g.cy+d.dy;
+      return nx>=0 && nx<COLS && ny>=0 && ny<ROWS && map[ny][nx] !== 1;
+    });
+    if (!valid.length) return;
+    const chosen = valid.reduce((best, d) =>
+      Math.hypot(g.cx+d.dx-tx, g.cy+d.dy-ty) < Math.hypot(g.cx+best.dx-tx, g.cy+best.dy-ty) ? d : best
+    );
+    tryMove(g, chosen.dx, chosen.dy);
+    return;
+  }
+
   if (g.mode === 'exiting') {
     // navigate to exit cell (10, 7) step by step
     const exitCx = 10, exitCy = 7;
@@ -551,20 +584,16 @@ function checkCollisions() {
     const dist = Math.hypot(g.px - player.px, g.py - player.py);
     if (dist < CELL * 0.75) {
       if (g.frightened && !g.eaten) {
-        g.eaten = true;
-        g.frightened = false;
+        g.eaten           = true;
+        g.frightened      = false;
         g.frightenedFlash = false;
+        g.mode            = 'returning';
+        g.speed           = g.baseSpeed * 2;
+        g.moving          = false;
         eatCombo++;
         score += 200 * eatCombo;
         scoreEl.textContent = score;
         showFloating(`+${200*eatCombo}`, player.px, player.py);
-        setTimeout(() => {
-          g.eaten = false;
-          g.mode = 'exiting';
-          const gc = cellCenter(g.cx, g.cy);
-          g.px = gc.px; g.py = gc.py;
-          g.moving = false;
-        }, 2500);
       } else if (!g.eaten && !g.frightened && g.mode !== 'house' && g.mode !== 'exiting') {
         playerDie();
       }
@@ -682,7 +711,9 @@ function loop(ts) {
       if (powerTimer === 80) ghosts.forEach(g => { if (g.frightened) g.frightenedFlash = true; });
       if (powerTimer === 0) {
         player.powered = false;
-        ghosts.forEach(g => { g.frightened = false; g.frightenedFlash = false; });
+        ghosts.forEach(g => {
+          if (g.mode !== 'returning') { g.frightened = false; g.frightenedFlash = false; }
+        });
         eatCombo = 0;
       }
     }
