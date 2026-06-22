@@ -312,7 +312,7 @@ function initLevel() {
     powered: false,
     moving: false,
     tcx: 10, tcy: 17,
-    boostTimer: 0, passTimer: 0,
+    boostTimer: 0, passTimer: 0, invulnTimer: 0,
   };
 
   ghosts = GHOST_DEFS.map((def, i) => {
@@ -820,7 +820,8 @@ function checkCollisions() {
         scoreEl.textContent = score;
         SFX.eatGhost(eatCombo);
         showFloating(`+${200*eatCombo}`, player.px, player.py);
-      } else if (!g.eaten && !g.frightened && g.mode !== 'house' && g.mode !== 'exiting') {
+      } else if (!g.eaten && !g.frightened && g.mode !== 'house' && g.mode !== 'exiting'
+                 && player.invulnTimer <= 0) {
         playerDie();
       }
     }
@@ -868,6 +869,25 @@ function drawPowerups() {
     ctx.restore();
   });
   noGlow();
+}
+
+// Respawn after death WITHOUT rebuilding the level: keep eaten dots, score,
+// and ghost positions. Drop the skull at the start with Speed Boost + Ghost-Pass
+// (and brief immunity in case a ghost is camping the start cell).
+function respawnPlayer() {
+  const c = cellCenter(10, 17);
+  player.cx = player.tcx = 10;
+  player.cy = player.tcy = 17;
+  player.px = c.px; player.py = c.py;
+  player.dx = 0; player.dy = 0;
+  player.ndx = -1; player.ndy = 0;
+  player.moving = false;
+  player.powered = false;
+  player.boostTimer  = 240; // ~4s speed
+  player.passTimer   = 180; // ~3s wall-phasing to escape
+  player.invulnTimer = 180; // ~3s ghost immunity, matches the pass window
+  powerTimer = 0;
+  ghosts.forEach(g => { g.frightened = false; g.frightenedFlash = false; });
 }
 
 function playerDie() {
@@ -969,6 +989,7 @@ function loop(ts) {
       if (e.boostTimer > 0) e.boostTimer--;
       if (e.passTimer  > 0 && --e.passTimer === 0) ejectFromWall(e);
     });
+    if (player.invulnTimer > 0) player.invulnTimer--;
 
     if (powerTimer > 0) {
       powerTimer--;
@@ -1009,7 +1030,7 @@ document.addEventListener('keydown', e => {
     if (state === 'title') {
       SFX.init(); hideOverlay(); state = 'playing'; SFX.startMusic();
     } else if (state === 'dead') {
-      SFX.init(); initLevel(); hideOverlay(); state = 'playing'; SFX.startMusic();
+      SFX.init(); respawnPlayer(); hideOverlay(); state = 'playing'; SFX.startMusic();
     } else if (state === 'gameover') {
       SFX.init(); init(); hideOverlay(); state = 'playing'; SFX.startMusic();
     } else if (state === 'levelup') {
