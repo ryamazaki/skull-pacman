@@ -41,4 +41,7 @@ Periodically a power-up spawns on a random walkable cell (max 2 at once). Either
 All sound is synthesized at runtime via the Web Audio API (the `SFX` module) — no asset files, keeping the single-file design. Square/triangle/sawtooth oscillators with quick gain envelopes produce 8-bit SFX (chomp, power, ghost-eaten, death, level-up). Background music is a low-volume ambient arpeggio looped on a `setInterval` scheduler. The `AudioContext` is created on the first Space/Enter press (browsers block audio before user interaction). `M` toggles mute.
 
 ### Map Format
-`BASE_MAP` is a 2D array of integers: `0`=empty, `1`=wall, `2`=dot, `3`=power pellet, `4`=ghost house (passable by ghosts only).
+Each map is a 2D array of integers: `0`=empty, `1`=wall, `2`=dot, `3`=power pellet, `4`=ghost house (passable by ghosts only). `MAPS` indexes layouts by `level-1` (`BASE_MAP` = level 1, `MAP2` = level 2; later levels reuse the last). New layouts must keep the ghost-house band (rows 7-14) intact and the row-9 tunnel open, or ghost mechanics break.
+
+### Levels & Portal
+Clearing **level 1** (all dots eaten) opens a glowing **portal** (`openPortal()`) on a random walkable cell instead of advancing automatically; the player must walk into it to trigger `advanceLevel()` → level 2. Other levels advance immediately on clear. **Level 2+ ghosts are smarter**: in `chase` mode they use `bfsStep(..., blockHouse=true)` to follow the true shortest path to the player rather than greedy distance.
